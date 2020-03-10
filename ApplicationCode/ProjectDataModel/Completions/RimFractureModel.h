@@ -1,7 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////////
 //
-//  Copyright (C) 2017-2018 Statoil ASA
-//  Copyright (C) 2018-     Equinor ASA
+//  Copyright (C) 2020-     Equinor ASA
 //
 //  ResInsight is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -36,11 +35,7 @@
 #include "cafPdmPtrField.h"
 
 class RimEclipseCase;
-class RimEllipseFractureTemplate;
-class RivWellFracturePartMgr;
-class RimFractureTemplate;
-class RigFracturedEclipseCellExportData;
-class RigMainGrid;
+class RivFractureModelPartMgr;
 
 //==================================================================================================
 ///
@@ -76,6 +71,8 @@ public:
     double                            endMD() const override;
     bool                              isEnabled() const override;
 
+    RivFractureModelPartMgr* fracturePartManager();
+
 protected:
     void defineUiOrdering( QString uiConfigName, caf::PdmUiOrdering& uiOrdering ) override;
     void defineEditorAttribute( const caf::PdmFieldHandle* field,
@@ -97,4 +94,8 @@ protected:
     caf::PdmField<double>                                                 m_tilt;
     caf::PdmField<cvf::Vec3d>                                             m_anchorPosition;
     caf::PdmField<cvf::Vec3d>                                             m_thicknessDirection;
+    caf::PdmField<double>                                                 m_boundingBoxVertical;
+    caf::PdmField<double>                                                 m_boundingBoxHorizontal;
+
+    cvf::ref<RivFractureModelPartMgr> m_fracturePartMgr;
 };

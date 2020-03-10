@@ -42,7 +42,7 @@
 #include "RimStimPlanFractureTemplate.h"
 #include "RimWellPath.h"
 
-#include "RivWellFracturePartMgr.h"
+#include "RivFractureModelPartMgr.h"
 
 #include "cafPdmUiDoubleSliderEditor.h"
 #include "cafPdmUiPushButtonEditor.h"
@@ -57,7 +57,7 @@
 
 #include <cmath>
 
-CAF_PDM_XML_ABSTRACT_SOURCE_INIT( RimFractureModel, "Fracture" );
+CAF_PDM_SOURCE_INIT( RimFractureModel, "RimFractureModel" );
 
 namespace caf
 {
@@ -104,8 +104,16 @@ RimFractureModel::RimFractureModel()
     CAF_PDM_InitField( &m_tilt, "Tilt", 0.0, "Tilt", "", "", "" );
     m_tilt.uiCapability()->setUiReadOnly( true );
 
-    CAF_PDM_InitFieldNoDefault( &m_anchorPosition, "AnchorPosition", "AnchorPosition", "", "", "" );
+    CAF_PDM_InitFieldNoDefault( &m_anchorPosition, "AnchorPosition", "Anchor Position", "", "", "" );
     m_anchorPosition.uiCapability()->setUiReadOnly( true );
+
+    CAF_PDM_InitFieldNoDefault( &m_thicknessDirection, "ThicknessDirection", "Thickness Direction", "", "", "" );
+    m_thicknessDirection.uiCapability()->setUiReadOnly( true );
+
+    CAF_PDM_InitField( &m_boundingBoxHorizontal, "BoundingBoxHorizontal", 50.0, "Bounding Box Horizontal", "", "", "" );
+    CAF_PDM_InitField( &m_boundingBoxVertical, "BoundingBoxVertical", 100.0, "Bounding Box Vertical", "", "", "" );
+
+    m_fracturePartMgr = new RivFractureModelPartMgr( this );
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -130,15 +138,13 @@ void RimFractureModel::fieldChangedByUi( const caf::PdmFieldHandle* changedField
                                          const QVariant&            oldValue,
                                          const QVariant&            newValue )
 {
-    // if ( changedField == &m_azimuth || changedField == this->objectToggleField() || changedField == &m_dip ||
-    //      changedField == &m_tilt )
-
     if ( changedField == &m_MD )
     {
         updatePositionFromMeasuredDepth();
     }
 
-    if ( changedField == &m_thicknessType )
+    if ( changedField == &m_MD || changedField == &m_thicknessType || changedField == &m_boundingBoxVertical ||
+         changedField == &m_boundingBoxHorizontal )
     {
         updateThicknessDirection();
     }
@@ -246,42 +252,25 @@ cvf::Vec3d RimFractureModel::anchorPosition() const
 //--------------------------------------------------------------------------------------------------
 cvf::Mat4d RimFractureModel::transformMatrix() const
 {
-    // cvf::Vec3d center = anchorPosition();
+    cvf::Vec3d center = anchorPosition();
 
-    // // Azimuth rotation
-    // cvf::Mat4d azimuthRotation = cvf::Mat4d::fromRotation( cvf::Vec3d::Z_AXIS, cvf::Math::toRadians( -m_azimuth() -
-    // 90 ) );
+    // Dip (in XY plane)
+    cvf::Mat4d dipRotation = cvf::Mat4d::fromRotation( cvf::Vec3d::Z_AXIS, cvf::Math::toRadians( m_dip() ) );
 
-    // cvf::Mat4d m = azimuthRotation * rotationFromTesselator * dipRotation * tiltRotation;
-    // m.setTranslation( center );
+    // Dip (out of XY plane)
+    cvf::Mat4d tiltRotation = cvf::Mat4d::fromRotation( cvf::Vec3d::X_AXIS, cvf::Math::toRadians( m_tilt() ) );
 
-    cvf::Mat4d m;
+    // Ellipsis geometry is produced in XY-plane, rotate 90 deg around X to get zero azimuth along Y
+    cvf::Mat4d rotationFromTesselator = cvf::Mat4d::fromRotation( cvf::Vec3d::X_AXIS, cvf::Math::toRadians( 90.0f ) );
+
+    // Azimuth rotation
+    cvf::Mat4d azimuthRotation = cvf::Mat4d::fromRotation( cvf::Vec3d::Z_AXIS, cvf::Math::toRadians( -m_azimuth() - 90 ) );
+
+    cvf::Mat4d m = azimuthRotation * rotationFromTesselator * dipRotation * tiltRotation;
+    m.setTranslation( center );
+
     return m;
 }
-
-// //--------------------------------------------------------------------------------------------------
-// ///
-// //--------------------------------------------------------------------------------------------------
-// void RimFractureModel::triangleGeometry( std::vector<cvf::uint>* triangleIndices, std::vector<cvf::Vec3f>* nodeCoords
-// ) const
-// {
-//     RimFractureModelTemplate* fractureDef = fractureTemplate();
-//     if ( fractureDef )
-//     {
-//         fractureDef->fractureTriangleGeometry( nodeCoords, triangleIndices );
-//     }
-
-//     cvf::Mat4d m = transformMatrix();
-
-//     for ( cvf::Vec3f& v : *nodeCoords )
-//     {
-//         cvf::Vec3d vd( v );
-
-//         vd.transformPoint( m );
-
-//         v = cvf::Vec3f( vd );
-//     }
-// }
 
 //--------------------------------------------------------------------------------------------------
 ///
@@ -319,8 +308,11 @@ void RimFractureModel::updateThicknessDirection()
         direction = calculateTSTDirection();
     }
 
-    m_dip  = cvf::Math::toDegrees( cvf::GeometryTools::getAngle( cvf::Vec3d::Z_AXIS, direction ) );
-    m_tilt = cvf::Math::toDegrees( cvf::GeometryTools::getAngle( cvf::Vec3d::X_AXIS, direction ) );
+    m_thicknessDirection = direction;
+
+    m_dip     = cvf::Math::toDegrees( cvf::GeometryTools::getAngle( cvf::Vec3d::Z_AXIS, direction ) );
+    m_tilt    = cvf::Math::toDegrees( cvf::GeometryTools::getAngle( cvf::Vec3d::X_AXIS, direction ) );
+    m_azimuth = cvf::Math::toDegrees( cvf::GeometryTools::getAngle( cvf::Vec3d::Y_AXIS, direction ) );
 }
 
 cvf::Vec3d RimFractureModel::calculateTSTDirection() const
@@ -342,13 +334,19 @@ cvf::Vec3d RimFractureModel::calculateTSTDirection() const
     RigMainGrid* mainGrid = eclipseCaseData->mainGrid();
     if ( !mainGrid ) return direction;
 
-    cvf::Vec3d boundingBoxSize( 50, 50, 100 );
+    cvf::Vec3d boundingBoxSize( m_boundingBoxHorizontal, m_boundingBoxHorizontal, m_boundingBoxVertical );
 
     // Find upper face of cells close to the anchor point
     cvf::BoundingBox    boundingBox( m_anchorPosition() - boundingBoxSize, m_anchorPosition() + boundingBoxSize );
     std::vector<size_t> closeCells;
     mainGrid->findIntersectingCells( boundingBox, &closeCells );
-    std::cout << "Close cells: " << closeCells.size() << std::endl;
+    std::cout << "Close cells count: " << closeCells.size() << std::endl;
+
+    if ( closeCells.empty() )
+    {
+        // No close cells found: just point straight up
+        return cvf::Vec3d( 0.0, 0.0, 1.0 );
+    }
 
     // The stratigraphic thickness is average the averge of normals of the top face
     for ( size_t globalCellIndex : closeCells )
@@ -360,7 +358,7 @@ cvf::Vec3d RimFractureModel::calculateTSTDirection() const
         direction += ( cell.center() - cell.faceCenter( cvf::StructGridInterface::NEG_K ) );
     }
 
-    return direction;
+    return ( direction / static_cast<double>( closeCells.size() ) ).getNormalized();
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -387,4 +385,14 @@ void RimFractureModel::defineEditorAttribute( const caf::PdmFieldHandle* field,
             myAttr->m_maximum = 360;
         }
     }
+}
+
+//--------------------------------------------------------------------------------------------------
+///
+//--------------------------------------------------------------------------------------------------
+RivFractureModelPartMgr* RimFractureModel::fracturePartManager()
+{
+    CVF_ASSERT( m_fracturePartMgr.notNull() );
+
+    return m_fracturePartMgr.p();
 }
